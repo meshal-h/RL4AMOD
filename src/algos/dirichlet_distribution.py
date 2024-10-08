@@ -39,7 +39,7 @@ class DirichletDistribution(Distribution):
 
     def proba_distribution(self: SelfDirichletDistribution, action_logits: torch.Tensor) -> SelfDirichletDistribution:
         concentration = F.softplus(action_logits)
-        concentration += torch.rand(concentration.shape) * 1e-20
+        concentration += torch.rand(concentration.shape).to(action_logits.device) * 1e-20
         self.concentration = concentration
         # print("concentration shape ", concentration.shape)
         self.distribution = Dirichlet(concentration)

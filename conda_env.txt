@@ -1,0 +1,6 @@
+conda create -n RL4AMOD python=3.11
+conda activate RL4AMOD
+conda install pytorch torchvision torchaudio pytorch-cuda=12.4 -c pytorch -c nvidia
+conda install gymnasium=0.29.1 matplotlib networkx=3.3 numpy pytorch_geometric=2.5.3 jupyter tensorboard
+pip install stable-baselines3==2.3.2 torch-tb-profiler
+pip install cplex docplex

@@ -38,8 +38,9 @@ beta_dict = {
 }
 
 # TODO: make this configurable
-CPLEXPATH = "/opt/ibm/ILOG/CPLEX_Studio2211/opl/bin/x86-64_linux/"
+# CPLEXPATH = "/opt/ibm/ILOG/CPLEX_Studio2211/opl/bin/x86-64_linux/"
 # CPLEXPATH = "/Applications/CPLEX_Studio2211/opl/bin/arm64_osx/"
+CPLEXPATH = "C:\\Program Files\\IBM\\ILOG\\CPLEX_Studio2211\\opl\\bin\\x64_win64\\"
 
 class GNNParser:
     """
@@ -88,7 +89,7 @@ class GNNParser:
                     )
                     .view(1, 1, self.env.nregion)
                     .float(),
-                    torch.tensor(
+                    torch.tensor( # this does not take into account that cars arriving will stay after they arrive
                         [
                             [
                                 (obs[0][n][self.env.time + 1] +
@@ -164,12 +165,12 @@ class AMoD(gym.Env):
         self.time = 0  # current time
         self.tf = self.scenario.tf  # final time
         self.demand = defaultdict(dict)  # demand
-        self.depDemand = dict()
-        self.arrDemand = dict()
+        #self.depDemand = dict()    # TODO: remove because it is not used
+        #self.arrDemand = dict()    # TODO: remove because it is not used
         self.region = list(self.G)  # set of regions
-        for i in self.region:
-            self.depDemand[i] = defaultdict(float)
-            self.arrDemand[i] = defaultdict(float)
+        # for i in self.region:
+        #     self.depDemand[i] = defaultdict(float)
+        #     self.arrDemand[i] = defaultdict(float)
 
         self.price = defaultdict(dict)  # price
         for (
@@ -183,8 +184,8 @@ class AMoD(gym.Env):
         ):  # trip attribute (origin, destination, time of request, demand, price)
             self.demand[i, j][t] = d
             self.price[i, j][t] = p
-            self.depDemand[i][t] += d
-            self.arrDemand[i][t + self.demandTime[i, j][t]] += d
+            #self.depDemand[i][t] += d
+            #self.arrDemand[i][t + self.demandTime[i, j][t]] += d
         self.acc = defaultdict(
             dict
         )  # number of vehicles within each region, key: i - region, t - time

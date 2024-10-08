@@ -19,9 +19,9 @@ class GCNExtractor(BaseFeaturesExtractor):
         self.lin2 = nn.Linear(hidden_features_dim, hidden_features_dim)
     
     def forward(self, observations) -> torch.Tensor:
-        x = observations['node_features'].type(torch.FloatTensor)
+        x = observations['node_features'].type(torch.FloatTensor).to(self.lin1.weight.device)
         num_nodes = x.shape[1]
-        edge_index = observations['edge_index'].type(torch.LongTensor)
+        edge_index = observations['edge_index'].type(torch.LongTensor).to(self.lin1.weight.device)
         data_list = [Data(x=x[i], edge_index=edge_index[i]) for i in range(x.shape[0])]
         batch = Batch.from_data_list(data_list)
         x = F.relu(self.conv1(batch.x, batch.edge_index))
