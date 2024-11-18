@@ -6,7 +6,7 @@ cplexpath: "/opt/opl/bin/x86-64_linux/"  # Defines directory of the CPLEX instal
   
 directory: "saved_files"  # Defines directory where to save files
 
-max_episodes: 10000  # Number of episodes to train agent (default: 16k)
+max_episodes: 2000  # Number of episodes to train agent (default: 16k)
 
 no_cuda: true  # Disables CUDA training
 

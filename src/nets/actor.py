@@ -26,14 +26,58 @@ class GNNActor(nn.Module):
         x = F.softplus(self.lin3(x))
         concentration = x.squeeze(-1)
         if deterministic:
-            action = (concentration) / (concentration.sum() + 1e-20)
+            action = (concentration) / (concentration.sum(dim=-1, keepdim=True) + 1e-20)
             log_prob = None
         else:
             m = Dirichlet(concentration + 1e-20)
             action = m.rsample()
             log_prob = m.log_prob(action)
         return action, log_prob
-    
+
+class GNNActorTD3(nn.Module):
+    """
+    Actor \pi(a_t | s_t) parametrizing the concentration parameters of a Dirichlet Policy.
+    """
+
+    def __init__(self, in_channels, hidden_size=32, act_dim=6, layer_norm=False):
+        super().__init__()
+        self.in_channels = in_channels
+        self.act_dim = act_dim
+        self.layer_norm = layer_norm
+
+        self.conv1 = GCNConv(in_channels, in_channels)
+
+        self.lin1 = nn.Linear(in_channels, hidden_size)
+        self.lin2 = nn.Linear(hidden_size, hidden_size)
+        self.lin3 = nn.Linear(hidden_size, 1)
+        
+        if self.layer_norm:
+            self.lin1_norm = nn.LayerNorm(hidden_size)
+            self.lin2_norm = nn.LayerNorm(hidden_size)
+
+        self.constant = 0.05
+
+
+    def forward(self, state, edge_index, deterministic=False):
+        out = F.relu(self.conv1(state, edge_index))
+        x = out + state
+        x = x.reshape(-1, self.act_dim, self.in_channels)
+        
+        if not self.layer_norm:
+            x = F.leaky_relu(self.lin1(x))
+            x = F.leaky_relu(self.lin2(x))
+            x = F.softplus(self.lin3(x))
+        else:
+            x = F.leaky_relu(self.lin1_norm(self.lin1(x)))
+            x = F.leaky_relu(self.lin2_norm(self.lin2(x)))
+            x = F.softplus(self.lin3(x))
+        
+        concentration = x.squeeze(-1) + 1e-4
+        action = (concentration) / (concentration.sum(dim=-1, keepdim=True))
+        
+        log_prob = None
+
+        return action, log_prob
 
 
 class GNNActorLSTM(nn.Module):

@@ -54,6 +54,9 @@ def setup_model(cfg, env, parser, device):
     elif model_name == "a2c":
         from src.algos.a2c import A2C
         return A2C(env=env, input_size=cfg.input_size,cfg=cfg, parser=parser).to(device)
+    elif model_name == "td3":
+        from src.algos.td3 import TD3
+        return TD3(env=env, input_size=cfg.input_size, cfg=cfg, parser=parser).to(device)
     else:
         raise ValueError(f"Unknown model or baseline: {model_name}")
 
@@ -74,8 +77,43 @@ def train(config):
     
     use_cuda = not cfg.model.no_cuda and torch.cuda.is_available()
     device = torch.device("cuda" if use_cuda else "cpu")
+
+    # Print device
+    print(f"Device: {device}")
+
     model = setup_model(cfg, env, parser, device)
     model.learn(cfg)
+
+def train_with_log(config): 
+    """
+    for colab tutorial
+    """
+
+    with initialize(config_path="src/config"): # Load the configuration
+        if config["model.name"] == "sac":
+                cfg = compose(config_name="config_sac", overrides= [f"{key}={value}" for key, value in config.items()]) 
+        elif config["model.name"]  == "td3":
+                cfg = compose(config_name="config_td3", overrides= [f"{key}={value}" for key, value in config.items()])
+        else:
+            raise ValueError(f"Unknown model.")
+
+    if cfg.simulator.name == "sumo":
+        env, parser = setup_sumo(cfg)
+    elif cfg.simulator.name == "macro":
+        env, parser = setup_macro(cfg)
+    else:
+        raise ValueError(f"Unknown simulator: {cfg.simulator.name}")
+    
+    use_cuda = not cfg.model.no_cuda and torch.cuda.is_available()
+    device = torch.device("cuda" if use_cuda else "cpu")
+
+    # Print device
+    print(f"Device: {device}")
+
+    model = setup_model(cfg, env, parser, device)
+    log = model.learn(cfg)
+
+    return log
 
 @hydra.main(version_base=None, config_path="src/config/", config_name="config")
 def main(cfg: DictConfig):

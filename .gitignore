@@ -1,3 +1,11 @@
+saved_files/
+ckpt/
+Deep*/
+log_*
+main_*
+plot*
+test*
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

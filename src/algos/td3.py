@@ -5,8 +5,8 @@ import torch.nn.functional as F
 from torch_geometric.data import Data, Batch
 from src.algos.reb_flow_solver import solveRebFlow
 from src.misc.utils import dictsum
-from src.nets.actor import GNNActor, GNNActorLSTM
-from src.nets.critic import GNNCritic, GNNCriticLSTM
+from src.nets.actor import GNNActorTD3
+from src.nets.critic import GNNCriticTD3
 import random
 from tqdm import trange
 import os
@@ -82,13 +82,9 @@ class Scalar(nn.Module):
         return self.constant
 
 #########################################
-############## A2C AGENT ################
+############## TD3 AGENT ################
 #########################################
-class SAC(nn.Module):
-    """
-    Advantage Actor Critic algorithm for the AMoD control problem.
-    """
-
+class TD3(nn.Module):
     def __init__(
         self,
         env,
@@ -97,100 +93,98 @@ class SAC(nn.Module):
         parser,
         device=torch.device("cpu"),
     ):
-        super(SAC, self).__init__()
+
+        super(TD3, self).__init__()
         self.env = env
         self.eps = np.finfo(np.float32).eps.item(),
-        if cfg.no_future:
-            self.input_size = 13 - 6
-            self.no_future = True
-        else:
-            self.input_size = input_size
-            self.no_future = False
+        self.input_size = input_size
         self.hidden_size = cfg.hidden_size
         self.device = device
         self.path = None
         self.act_dim = env.nregion
 
-        # SAC parameters
-        self.alpha = cfg.alpha
-        self.polyak = 0.995
-        self.env = env
-        self.BATCH_SIZE = cfg.batch_size
-        self.p_lr = cfg.p_lr
-        self.q_lr = cfg.q_lr
-        self.gamma = 0.99
-        self.use_automatic_entropy_tuning = cfg.auto_entropy
-        self.clip = cfg.clip
-        self.use_LSTM = cfg.use_LSTM
         self.parser = parser
-        #self.sim = cfg.simulator.name
 
-        self.cplexpath = cfg.cplexpath
+        # TD3 parameters
+        self.max_action = 1.0
+        self.min_action = 0.0 + 1e-4
+        self.discount = 0.99
+        self.tau = 0.1 # 0.1
+        self.policy_noise = 0.2
+        self.noise_clip = 0.5
+        self.policy_freq = 1
+        self.lr = 1.00e-3
+        self.l2 = 1e-2
+        # self.grad_clip = 100.0
+
+        # Replay buffer
+        self.replay_buffer = ReplayData(device=device)
+
+        # Networks
+        self.actor = GNNActorTD3(self.input_size, self.hidden_size, act_dim=self.act_dim, layer_norm=cfg.actor_layer_norm)
+        self.critic_1 = GNNCriticTD3(self.input_size, self.hidden_size, act_dim=self.act_dim, layer_norm=cfg.q_layer_norm)
+        self.critic_2 = GNNCriticTD3(self.input_size, self.hidden_size, act_dim=self.act_dim, layer_norm=cfg.q_layer_norm)
+        
+        """
+        def nan_hook(self, inp, output):
+            if not isinstance(output, tuple):
+                outputs = [output]
+            else:
+                outputs = output[0]
+                if len(output) > 2:
+                    raise NotImplementedError("More than one output in hook.")
+
+            for i, out in enumerate(outputs):
+                nan_mask = torch.isnan(out)
+                if nan_mask.any():
+                    print("In", self.__class__.__name__)
+                    print(f"Found NAN in output {i} at indices: ", nan_mask.nonzero(), "where:", out[nan_mask.nonzero()[:, 0].unique(sorted=True)])
+                    #raise RuntimeError("Nan detected.")
+            
+            return None
+            
+            
+        for submodule in self.actor.modules():
+            submodule.register_forward_hook(nan_hook)
+        for submodule in self.critic_1.modules():
+            submodule.register_forward_hook(nan_hook)
+        for submodule in self.critic_2.modules():
+            submodule.register_forward_hook(nan_hook)
+        """
+
+        self.actor_target = deepcopy(self.actor)
+        self.critic_1_target = deepcopy(self.critic_1)
+        self.critic_2_target = deepcopy(self.critic_2)
+
+        for p in self.critic_1_target.parameters():
+            p.requires_grad = False
+        for p in self.critic_2_target.parameters():
+            p.requires_grad = False
+
+        # Optimizers
+        self.actor_optimizer = torch.optim.AdamW(self.actor.parameters(), lr=self.lr, weight_decay=self.l2)
+        self.critic_1_optimizer = torch.optim.AdamW(self.critic_1.parameters(), lr=self.lr, weight_decay=self.l2)
+        self.critic_2_optimizer = torch.optim.AdamW(self.critic_2.parameters(), lr=self.lr, weight_decay=self.l2)
+
+        # Other
         self.directory = cfg.directory
         self.agent_name = cfg.agent_name
-        self.step = 0
-        self.nodes = env.nregion
+        self.cplexpath = cfg.cplexpath
 
-        self.replay_buffer = ReplayData(device=device)
-        """
-        self.actor = models["actor"](self.input_size, self.hidden_size, act_dim=self.act_dim)
-        self.critic1 = models["critic"](self.input_size, self.hidden_size, act_dim=self.act_dim)
-        self.critic2 = models["critic"](self.input_size, self.hidden_size, act_dim=self.act_dim)
+        self.entropy_factor = cfg.entropy_factor
 
-        assert self.critic1.parameters() != self.critic2.parameters()
+        self.total_it = 0
 
-        self.critic1_target = models["critic"](self.input_size, self.hidden_size, act_dim=self.act_dim)
-        self.critic1_target.load_state_dict(self.critic1.state_dict())
-        self.critic2_target = models["critic"](self.input_size, self.hidden_size, act_dim=self.act_dim)
-        self.critic2_target.load_state_dict(self.critic2.state_dict())
-        
-        # nnets
-        """
-        if self.use_LSTM:
-            self.actor = GNNActorLSTM(self.input_size, self.hidden_size, act_dim=self.act_dim)
-            self.critic1 = GNNCriticLSTM(self.input_size, self.hidden_size, act_dim=self.act_dim)
-            self.critic2 = GNNCriticLSTM(self.input_size, self.hidden_size, act_dim=self.act_dim)
-        else:
-            self.actor = GNNActor(self.input_size, self.hidden_size, act_dim=self.act_dim)
-            self.critic1 = GNNCritic(self.input_size, self.hidden_size, act_dim=self.act_dim)
-            self.critic2 = GNNCritic(self.input_size, self.hidden_size, act_dim=self.act_dim)
-
-        assert self.critic1.parameters() != self.critic2.parameters()
-
-        self.critic1_target = GNNCritic(self.input_size, self.hidden_size, act_dim=self.act_dim)
-        self.critic1_target.load_state_dict(self.critic1.state_dict())
-        self.critic2_target = GNNCritic(self.input_size, self.hidden_size, act_dim=self.act_dim)
-        self.critic2_target.load_state_dict(self.critic2.state_dict())
-        
-        for p in self.critic1_target.parameters():
-            p.requires_grad = False
-        for p in self.critic2_target.parameters():
-            p.requires_grad = False
-
-        self.optimizers = self.configure_optimizers()
-
-        # action & reward buffer
-        self.saved_actions = []
-        self.rewards = []
-        self.to(self.device)
-
-        if self.use_automatic_entropy_tuning:
-            self.target_entropy = -np.prod(self.act_dim).item()
-            self.log_alpha = Scalar(0.0)
-            self.alpha_optimizer = torch.optim.Adam(
-                self.log_alpha.parameters(), lr=1e-3
-            )
     def select_action(self, data, deterministic=True):
         with torch.no_grad():
-            if self.no_future:
-                a, _ = self.actor(data.x[:, [0,7,8,9,10,11,12]], data.edge_index, deterministic)
-            else:
-                a, _ = self.actor(data.x, data.edge_index, deterministic)
+            a, _ = self.actor(data.x, data.edge_index, deterministic)
         a = a.squeeze(-1)
         a = a.detach().cpu().numpy()[0]
         return list(a)
 
-    def compute_loss_q(self, data):
+    def update(self, data):
+        self.total_it += 1
+
         (
             state_batch,
             edge_index,
@@ -204,114 +198,110 @@ class SAC(nn.Module):
             data.x_t,
             data.edge_index_t,
             data.reward,
-            data.action.reshape(-1, self.nodes),
+            data.action.reshape(-1, self.act_dim),
         )
 
-        if self.no_future:
-            state_batch = state_batch[:, [0,7,8,9,10,11,12]]
-            next_state_batch = next_state_batch[:, [0,7,8,9,10,11,12]]
-
-        q1 = self.critic1(state_batch, edge_index, action_batch)
-        q2 = self.critic2(state_batch, edge_index, action_batch)
         with torch.no_grad():
-            # Target actions come from *current* policy
-            a2, logp_a2 = self.actor(next_state_batch, edge_index2)
-            q1_pi_targ = self.critic1_target(next_state_batch, edge_index2, a2)
-            q2_pi_targ = self.critic2_target(next_state_batch, edge_index2, a2)
-            q_pi_targ = torch.min(q1_pi_targ, q2_pi_targ)
+            # Select action according to policy and add clipped noise
+            noise = (
+                torch.randn_like(action_batch) * self.policy_noise
+            ).clamp(-self.noise_clip, self.noise_clip)
+            
+            next_action = self.actor_target(next_state_batch, edge_index2, True)[0]
+            next_action = (next_action + noise).clamp(self.min_action, self.max_action)
+            next_action = next_action / next_action.sum(dim=-1, keepdim=True)
 
-            backup = reward_batch + self.gamma * (q_pi_targ - self.alpha * logp_a2)
+            # Compute the target Q value
+            target_Q1 = self.critic_1_target(next_state_batch, edge_index2, next_action) 
+            target_Q2 = self.critic_2_target(next_state_batch, edge_index2, next_action)
+            target_Q = torch.min(target_Q1, target_Q2)
+            target_Q = reward_batch + self.discount * target_Q
 
-        loss_q1 = F.mse_loss(q1, backup)
-        loss_q2 = F.mse_loss(q2, backup)
+        # Get current Q estimates
+        current_Q1 = self.critic_1(state_batch, edge_index, action_batch)
+        current_Q2 = self.critic_2(state_batch, edge_index, action_batch)
 
-        return loss_q1, loss_q2
+        # Compute critic loss
+        critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
 
-    def compute_loss_pi(self, data):
-        state_batch, edge_index = (
-            data.x_s,
-            data.edge_index_s,
-        )
+        # Optimize the critic
+        self.critic_1_optimizer.zero_grad()
+        self.critic_2_optimizer.zero_grad()
 
-        if self.no_future:
-            state_batch = state_batch[:, [0,7,8,9,10,11,12]]
+        critic_loss.backward()
 
-        actions, logp_a = self.actor(state_batch, edge_index)
-        q1_1 = self.critic1(state_batch, edge_index, actions)
-        q2_a = self.critic2(state_batch, edge_index, actions)
-        q_a = torch.min(q1_1, q2_a)
+        # with torch.autograd.detect_anomaly():
+        #         critic_loss.backward()
+        
+        # torch.nn.utils.clip_grad_norm_(self.critic_1.parameters(), self.grad_clip)
+        # torch.nn.utils.clip_grad_norm_(self.critic_2.parameters(), self.grad_clip)
 
-        if self.use_automatic_entropy_tuning:
-            alpha_loss = -(
-                self.log_alpha() * (logp_a + self.target_entropy).detach()
-            ).mean()
-            self.alpha_optimizer.zero_grad()
-            alpha_loss.backward()
-            self.alpha_optimizer.step()
-            self.alpha = self.log_alpha().exp()
+        # for name, param in self.critic_1.named_parameters():
+        #     if param.grad is not None:
+        #         if torch.isnan(param.grad).any():
+        #             print(f"Critic 1.")
+        #             print(f"Gradient of {name} is nan.")
+        #             print(param.grad)
+        
+        # for name, param in self.critic_2.named_parameters():
+        #     if param.grad is not None:
+        #         if torch.isnan(param.grad).any():
+        #             print(f"Critic 2.")
+        #             print(f"Gradient of {name} is nan.")
+        #             print(param.grad)
 
-        loss_pi = (self.alpha * logp_a - q_a).mean()
-        return loss_pi
+        self.critic_1_optimizer.step()
+        self.critic_2_optimizer.step()
 
-    def update(self, data):
-        loss_q1, loss_q2 = self.compute_loss_q(data)
+        # Delayed policy updates
+        if (self.total_it % self.policy_freq == 0):
 
-        self.optimizers["c1_optimizer"].zero_grad()
+            # Compute actor loss
+            actor_action = self.actor(state_batch, edge_index, True)[0]
+            q_loss = -self.critic_1(state_batch, edge_index, actor_action).mean() 
+            if self.entropy_factor == 0:
+                actor_loss = q_loss
+            else:
+                raise NotImplementedError("Entropy factor not implemented yet.")
+                actor_entropy = (actor_action * actor_action.log()).sum(dim=-1)
+                actor_loss = q_loss + self.entropy_factor*actor_entropy.mean()
 
-        nn.utils.clip_grad_norm_(self.critic1.parameters(), self.clip)
-        loss_q1.backward()
-        self.optimizers["c1_optimizer"].step()
+            # actor_loss = -self.critic_1(state_batch, edge_index, self.actor(state_batch, edge_index, True)[0]).mean() 
+            # - self.actor(state_batch, edge_index, True)[0].log().mean()
+            # actor_loss = -self.actor(state_batch, edge_index, True)[0].log().mean()
 
-        self.optimizers["c2_optimizer"].zero_grad()
-        loss_q2.backward()
-        nn.utils.clip_grad_norm_(self.critic2.parameters(), self.clip)
-        self.optimizers["c2_optimizer"].step()
+            # actor_action = self.actor(state_batch, edge_index, True)[0]
+            # actor_entropy = - actor_action * actor_action.log()
+            # actor_loss = - self.critic_1(state_batch, edge_index, actor_action).mean() - actor_entropy.mean()
 
-        # Update target networks by polyak averaging.
-        with torch.no_grad():
-            for p, p_targ in zip(
-                self.critic1.parameters(), self.critic1_target.parameters()
-            ):
-                p_targ.data.mul_(self.polyak)
-                p_targ.data.add_((1 - self.polyak) * p.data)
-            for p, p_targ in zip(
-                self.critic2.parameters(), self.critic2_target.parameters()
-            ):
-                p_targ.data.mul_(self.polyak)
-                p_targ.data.add_((1 - self.polyak) * p.data)
+            
+            # Optimize the actor 
+            self.actor_optimizer.zero_grad()
+            actor_loss.backward()
 
-        # Freeze Q-networks so you don't waste computational effort
-        # computing gradients for them during the policy learning step.
-        for p in self.critic1.parameters():
-            p.requires_grad = False
-        for p in self.critic2.parameters():
-            p.requires_grad = False
+            # with torch.autograd.detect_anomaly():
+            #     actor_loss.backward()
+            # torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.grad_clip)
 
-        # one gradient descent step for policy network
-        self.optimizers["a_optimizer"].zero_grad()
-        loss_pi = self.compute_loss_pi(data)
-        loss_pi.backward(retain_graph=False)
-        nn.utils.clip_grad_norm_(self.actor.parameters(), 10)
-        self.optimizers["a_optimizer"].step()
+            # for name, param in self.actor.named_parameters():
+            #     if param.grad is not None:
+            #         if torch.isnan(param.grad).any():
+            #             print(f"Actor.")
+            #             print(f"Gradient of {name} is nan.")
+            #             print(param.grad)
 
-        # Unfreeze Q-networks
-        for p in self.critic1.parameters():
-            p.requires_grad = True
-        for p in self.critic2.parameters():
-            p.requires_grad = True
+            self.actor_optimizer.step()
 
-    def configure_optimizers(self):
-        optimizers = dict()
-        actor_params = list(self.actor.parameters())
-        critic1_params = list(self.critic1.parameters())
-        critic2_params = list(self.critic2.parameters())
+            # Update the frozen target models
+            for param, target_param in zip(self.critic_1.parameters(), self.critic_1_target.parameters()):
+                target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
-        optimizers["a_optimizer"] = torch.optim.Adam(actor_params, lr=self.p_lr)
-        optimizers["c1_optimizer"] = torch.optim.Adam(critic1_params, lr=self.q_lr)
-        optimizers["c2_optimizer"] = torch.optim.Adam(critic2_params, lr=self.q_lr)
+            for param, target_param in zip(self.critic_2.parameters(), self.critic_2_target.parameters()):
+                target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
-        return optimizers
-    
+            for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
+                target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
+
     def learn(self, cfg):
         sim = cfg.simulator.name
         if sim == "sumo": 
@@ -344,17 +334,29 @@ class SAC(nn.Module):
         log["served_demand"] = []
         log["rebalancing_cost"] = []
         log["actions"] = []
+        log["constant"] = []
+        log["avg_parameter"] = []
+        log["max_parameter"] = []
+
+        nan_break = False
 
         # Manually create and manage the ProcessPoolExecutor
         #lock = threading.Lock()
         #executor = concurrent.futures.ProcessPoolExecutor(max_workers=cfg.other.num_update)
         
         for i_episode in epochs:
+
+            if nan_break:
+                break
+
             if sim =='sumo':
                 traci.start(sumo_cmd)
             obs_unparsed, rew = self.env.reset()  # initialize environment
             
             log["actions"].append([])
+            log["constant"].append(0)
+            log["avg_parameter"].append([])
+            log["max_parameter"].append([])
 
             obs = self.parser.parse_obs(obs_unparsed)
             episode_reward = 0
@@ -399,7 +401,11 @@ class SAC(nn.Module):
 
                             env = deepcopy(self.env)
 
-                            obs, action_rl, rew, new_obs = temp(env, self.parser, self.select_action, self.cplexpath, cfg.model.rew_scale, n, grid[n,:])
+                            obs, action_rl, rew, new_obs, nan_break = temp(env, self.parser, self.select_action, self.cplexpath, cfg.model.rew_scale, n, grid[n,:])
+
+                            if nan_break:
+                                nan_check(self.actor)
+                                break
 
                             if cfg.other.at_once_update:
                                 buffer.store(obs, action_rl, rew, new_obs)
@@ -423,17 +429,29 @@ class SAC(nn.Module):
 
                 ############
                 
+                if nan_break:
+                    break
+
                 obs_unparsed = (self.env.acc, self.env.time, self.env.dacc, self.env.demand)
                 obs = self.parser.parse_obs(obs_unparsed)
 
                 action_rl = self.select_action(obs)
+
+                # check if nan 
+                if np.isnan(action_rl).any():
+                    print("Nan in action_rl")
+                    print(action_rl)
+                    print("Obs: ", obs)
+                    nan_check(self.actor)
+                    nan_break = True
+                    break
 
                 log["actions"][-1].append(action_rl)
 
                 desiredAcc = {self.env.region[i]: int(action_rl[i] * dictsum(self.env.acc, self.env.time + 1))
                     for i in range(len(self.env.region))
                 }
-        
+
                 reb_action = solveRebFlow(
                     self.env,
                     self.env.cfg.directory,
@@ -466,6 +484,11 @@ class SAC(nn.Module):
                         self.update(data=batch)
                 if sim =='sumo' and done:
                     traci.close()
+
+                avg_value, max_value = parameter_value(self.actor)
+                log["avg_parameter"][-1].append(avg_value)
+                log["max_parameter"][-1].append(max_value)
+
             epochs.set_description(
                 f"Episode {i_episode+1} | Reward: {episode_reward:.2f} | ServedDemand: {episode_served_demand:.2f} | Reb. Cost: {episode_rebalancing_cost:.2f}"
             )
@@ -487,7 +510,17 @@ class SAC(nn.Module):
         # Explicit shutdown after the loop completes
         #executor.shutdown(wait=True)
 
-        log["actions"] = np.array(log["actions"])
+        if not nan_break:
+            log["actions"] = np.array(log["actions"])
+            log["constant"] = np.array(log["constant"])
+            log["avg_parameter"] = np.array(log["avg_parameter"])
+            log["max_parameter"] = np.array(log["max_parameter"])
+        else:
+            print("Nan detected")
+            log["actions"] = np.array(log["actions"][:-1])
+            log["constant"] = np.array(log["constant"][:-1])
+            log["avg_parameter"] = np.array(log["avg_parameter"][:-1])
+            log["max_parameter"] = np.array(log["max_parameter"][:-1])
 
         return log
 
@@ -578,13 +611,17 @@ class SAC(nn.Module):
         )
 
     def save_checkpoint(self, path="ckpt.pth"):
+        
         checkpoint = dict()
         checkpoint["model"] = self.state_dict()
-        for key, value in self.optimizers.items():
-            checkpoint[key] = value.state_dict()
+        checkpoint["actor_optimizer"] = self.actor_optimizer.state_dict()
+        checkpoint["critic_1_optimizer"] = self.critic_1_optimizer.state_dict()
+        checkpoint["critic_2_optimizer"] = self.critic_2_optimizer.state_dict()
+
         torch.save(checkpoint, path)
 
     def load_checkpoint(self, path="ckpt.pth"):
+        
         checkpoint = torch.load(path)
         try:
             # Attempt to load the model state dict as is
@@ -606,8 +643,9 @@ class SAC(nn.Module):
 
             self.load_state_dict(new_state_dict)
         
-        for key, value in self.optimizers.items():
-            self.optimizers[key].load_state_dict(checkpoint[key])
+        self.actor_optimizer.load_state_dict(checkpoint["actor_optimizer"])
+        self.critic_1_optimizer.load_state_dict(checkpoint["critic_1_optimizer"])
+        self.critic_2_optimizer.load_state_dict(checkpoint["critic_2_optimizer"])
 
     def log(self, log_dict, path="log.pth"):
         torch.save(log_dict, path)
@@ -618,10 +656,11 @@ def temp(env, parser, select_action, cplexpath, rew_scale, n, acc_new):
     # Convert prob to vehicles count
     total_reb_vehicles = dictsum(env.acc, env.time + 1)
 
-    acc_new = (acc_new * total_reb_vehicles).round()
-    acc_diff = acc_new.sum() - total_reb_vehicles
-    i_max = np.argmax(acc_new)
-    acc_new[i_max] = acc_new[i_max] - acc_diff
+    # acc_new = (acc_new * total_reb_vehicles).round()
+    # acc_diff = acc_new.sum() - total_reb_vehicles
+    # i_max = np.argmax(acc_new)
+    # acc_new[i_max] = acc_new[i_max] - acc_diff
+    acc_new = convert_prob_to_count(acc_new, int(total_reb_vehicles))
 
     # Update state
     for i in env.region:
@@ -632,17 +671,33 @@ def temp(env, parser, select_action, cplexpath, rew_scale, n, acc_new):
     obs = parser.parse_obs(obs_unparsed)
 
     action_rl = select_action(obs)
+
+    # check if nan 
+    if np.isnan(action_rl).any():
+        print("Nan in action_rl")
+        print(action_rl)
+        print("Obs: ", obs)
+        nan_break = True
+        return None, None, None, None, nan_break
+
     desiredAcc = {env.region[i]: int(action_rl[i] * dictsum(env.acc, env.time + 1))
         for i in range(len(env.region))
     }
+    
+    try:
+        reb_action = solveRebFlow(
+            env,
+            env.cfg.directory,
+            desiredAcc,
+            cplexpath,
+            n
+        )
 
-    reb_action = solveRebFlow(
-        env,
-        env.cfg.directory,
-        desiredAcc,
-        cplexpath,
-        n
-    )
+    except:
+        print("Error in solveRebFlow; Solution does not exist.")
+        print("Total Reb Vehicles: ", int(total_reb_vehicles), ", Desired Acc: ", desiredAcc)
+
+        reb_action = [0.0]*(env.nregion*env.nregion)
 
     new_obs, rew, done, _ = env.step(reb_action=reb_action)
     new_obs = parser.parse_obs(new_obs)
@@ -650,7 +705,7 @@ def temp(env, parser, select_action, cplexpath, rew_scale, n, acc_new):
     if done:
         raise ValueError("Environment is done, check before calling this function failed.")
 
-    return obs, action_rl, rew_scale * rew, new_obs
+    return obs, action_rl, rew_scale * rew, new_obs, False
 
 def process_task(env, parser, select_action, cplexpath, rew_scale, replay_buffer, lock, n):
     # Copy the environment
@@ -686,3 +741,41 @@ def generate_probability_uniform(d, k):
         grid.append(prob)
 
     return np.array(grid)
+
+def convert_prob_to_count(prob_vector, total_count):
+    # Step 1: Scale the probabilities to the total count
+    scaled_counts = prob_vector * total_count
+    
+    # Step 2: Floor the values to get initial integers
+    int_vector = np.floor(scaled_counts).astype(int)
+    
+    # Step 3: Calculate the difference to be adjusted
+    difference = total_count - int_vector.sum()
+    
+    # Step 4: Distribute the difference based on largest fractional parts
+    fractional_parts = scaled_counts - int_vector
+    indices = np.argsort(-fractional_parts)  # Sort in descending order of fractional part
+    int_vector[indices[:difference]] += 1
+    
+    return int_vector
+
+def parameter_value(model):
+    total_sum = 0.0
+    total_params = 0
+    max_value = 0.0
+    
+    for param in model.parameters():
+        total_sum += param.data.abs().sum().item()
+        total_params += param.numel()
+        max_value = max(max_value, param.data.abs().max().item())
+    
+    avg_value = total_sum / total_params if total_params > 0 else 0.0
+    return avg_value, max_value
+
+def nan_check(model):
+    count = 0
+    for param in model.parameters():
+        if torch.isnan(param).any():
+            count += 1
+    print(f"Number of NaN parameters: {count}")
+    return
