@@ -20,6 +20,11 @@
       "json_hr": 19,
       "beta": 0.5
     },
+    "chicago_sparse": {
+      "demand_ratio": 1.2,
+      "json_hr": 19,
+      "beta": 0.5
+    },
     "nyc_man_north": {
       "demand_ratio": 1.8,
       "json_hr": 19,
@@ -68,6 +73,11 @@
       "beta": 0.5
     },
     "shenzhen_downtown_east_double": {
+      "demand_ratio": 3,
+      "json_hr": 8,
+      "beta": 0.5
+    },
+    "shenzhen_downtown_east_sparse": {
       "demand_ratio": 3,
       "json_hr": 8,
       "beta": 0.5
