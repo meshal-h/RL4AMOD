@@ -334,9 +334,10 @@ class TD3(nn.Module):
         log["served_demand"] = []
         log["rebalancing_cost"] = []
         log["actions"] = []
-        log["constant"] = []
         log["avg_parameter"] = []
         log["max_parameter"] = []
+        log["reb_actions"] = []
+        log["acc"] = []
 
         nan_break = False
 
@@ -354,9 +355,9 @@ class TD3(nn.Module):
             obs_unparsed, rew = self.env.reset()  # initialize environment
             
             log["actions"].append([])
-            log["constant"].append(0)
             log["avg_parameter"].append([])
             log["max_parameter"].append([])
+            log["reb_actions"].append([])
 
             obs = self.parser.parse_obs(obs_unparsed)
             episode_reward = 0
@@ -459,6 +460,8 @@ class TD3(nn.Module):
                     self.cplexpath,
                 )
                 new_obs, rew, done, info = self.env.step(reb_action=reb_action)
+
+                log["reb_actions"][-1].append(reb_action)
                 
                 episode_reward += rew
                 episode_served_demand += info["profit"]
@@ -498,6 +501,18 @@ class TD3(nn.Module):
             log["served_demand"].append(episode_served_demand)
             log["rebalancing_cost"].append(episode_rebalancing_cost)
 
+            # log acc
+            acc_N = len(self.env.acc)
+            acc_T = len(self.env.acc[0])
+            acc = np.zeros((acc_N, acc_T))
+
+            for acc_node in range(acc_N):
+                for acc_time in range(acc_T):
+                    acc[acc_node, acc_time] = self.env.acc[acc_node][acc_time]
+
+            log["acc"].append(acc)
+            ###
+
             self.save_checkpoint(
                 path=f"ckpt/{cfg.model.checkpoint_path}.pth"
             )
@@ -512,15 +527,17 @@ class TD3(nn.Module):
 
         if not nan_break:
             log["actions"] = np.array(log["actions"])
-            log["constant"] = np.array(log["constant"])
             log["avg_parameter"] = np.array(log["avg_parameter"])
             log["max_parameter"] = np.array(log["max_parameter"])
+            log["reb_actions"] = np.array(log["reb_actions"])
+            log["acc"] = np.array(log["acc"])
         else:
             print("Nan detected")
             log["actions"] = np.array(log["actions"][:-1])
-            log["constant"] = np.array(log["constant"][:-1])
             log["avg_parameter"] = np.array(log["avg_parameter"][:-1])
             log["max_parameter"] = np.array(log["max_parameter"][:-1])
+            log["reb_actions"] = np.array(log["reb_actions"][:-1])
+            log["acc"] = np.array(log["acc"][:-1])
 
         return log
 

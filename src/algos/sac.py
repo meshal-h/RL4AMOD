@@ -344,6 +344,8 @@ class SAC(nn.Module):
         log["served_demand"] = []
         log["rebalancing_cost"] = []
         log["actions"] = []
+        log["reb_actions"] = []
+        log["acc"] = []
 
         # Manually create and manage the ProcessPoolExecutor
         #lock = threading.Lock()
@@ -355,6 +357,7 @@ class SAC(nn.Module):
             obs_unparsed, rew = self.env.reset()  # initialize environment
             
             log["actions"].append([])
+            log["reb_actions"].append([])
 
             obs = self.parser.parse_obs(obs_unparsed)
             episode_reward = 0
@@ -442,6 +445,8 @@ class SAC(nn.Module):
                 )
                 new_obs, rew, done, info = self.env.step(reb_action=reb_action)
                 
+                log["reb_actions"][-1].append(reb_action)
+
                 episode_reward += rew
                 episode_served_demand += info["profit"]
                 episode_rebalancing_cost += info["rebalancing_cost"]
@@ -475,6 +480,18 @@ class SAC(nn.Module):
             log["served_demand"].append(episode_served_demand)
             log["rebalancing_cost"].append(episode_rebalancing_cost)
 
+            # log acc
+            acc_N = len(self.env.acc)
+            acc_T = len(self.env.acc[0])
+            acc = np.zeros((acc_N, acc_T))
+
+            for acc_node in range(acc_N):
+                for acc_time in range(acc_T):
+                    acc[acc_node, acc_time] = self.env.acc[acc_node][acc_time]
+
+            log["acc"].append(acc)
+            ###
+
             self.save_checkpoint(
                 path=f"ckpt/{cfg.model.checkpoint_path}.pth"
             )
@@ -488,6 +505,8 @@ class SAC(nn.Module):
         #executor.shutdown(wait=True)
 
         log["actions"] = np.array(log["actions"])
+        log["reb_actions"] = np.array(log["reb_actions"])
+        log["acc"] = np.array(log["acc"])
 
         return log
 
