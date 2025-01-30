@@ -103,6 +103,9 @@ class TD3(nn.Module):
         self.path = None
         self.act_dim = env.nregion
 
+        self.ckpt_path = cfg.ckpt_path
+        os.makedirs(self.ckpt_path, exist_ok=True)
+
         self.parser = parser
 
         # TD3 parameters
@@ -302,7 +305,7 @@ class TD3(nn.Module):
             for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
                 target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
-    def learn(self, cfg):
+    def learn(self, cfg, num):
         sim = cfg.simulator.name
         if sim == "sumo": 
             #traci.close(wait=False)
@@ -514,12 +517,12 @@ class TD3(nn.Module):
             ###
 
             self.save_checkpoint(
-                path=f"ckpt/{cfg.model.checkpoint_path}.pth"
+                path=f"{self.ckpt_path}/{cfg.model.checkpoint_path}_{num}.pth"
             )
             if episode_reward > best_reward: 
                 best_reward = episode_reward
                 self.save_checkpoint(
-                    path=f"ckpt/{cfg.model.checkpoint_path}_best.pth"
+                    path=f"{self.ckpt_path}/{cfg.model.checkpoint_path}_best_{num}.pth"
                 )
 
         # Explicit shutdown after the loop completes
