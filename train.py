@@ -84,7 +84,7 @@ def train(config):
     model = setup_model(cfg, env, parser, device)
     model.learn(cfg)
 
-def train_with_log(config): 
+def train_with_log(config, num): 
     """
     for colab tutorial
     """
@@ -111,7 +111,7 @@ def train_with_log(config):
     print(f"Device: {device}")
 
     model = setup_model(cfg, env, parser, device)
-    log = model.learn(cfg)
+    log = model.learn(cfg, num)
 
     return log
 
