@@ -15,9 +15,11 @@ if 'SUMO_HOME' in os.environ:
     sys.path.append(os.path.join(os.environ['SUMO_HOME'], 'tools'))
 import traci
 
-import concurrent.futures
+#import concurrent.futures
+#import threading
+
 from copy import deepcopy
-import threading
+from joblib import Parallel, delayed
 
 class PairData(Data):
     """
@@ -401,20 +403,78 @@ class TD3(nn.Module):
                             raise ValueError("Invalid sampling method.")
 
                         #"""
-                        for n in range(cfg.other.num_update):
 
-                            env = deepcopy(self.env)
+                        if False:
+                            for n in range(cfg.other.num_update):
 
-                            obs, action_rl, rew, new_obs, nan_break = temp(env, self.parser, self.select_action, self.cplexpath, cfg.model.rew_scale, n, grid[n,:])
+                                env = deepcopy(self.env)
 
-                            if nan_break:
-                                nan_check(self.actor)
-                                break
+                                obs, action_rl, rew, new_obs, nan_break = temp(env, self.parser, self.select_action, self.cplexpath, cfg.model.rew_scale, n, grid[n,:])
 
-                            if cfg.other.at_once_update:
-                                buffer.store(obs, action_rl, rew, new_obs)
-                            else:
-                                self.replay_buffer.store(obs, action_rl, rew, new_obs)
+                                if nan_break:
+                                    nan_check(self.actor)
+                                    break
+
+                                if cfg.other.at_once_update:
+                                    buffer.store(obs, action_rl, rew, new_obs)
+                                else:
+                                    self.replay_buffer.store(obs, action_rl, rew, new_obs)
+
+                        else:
+                            
+                            if self.cplexpath != "None":
+                                raise NotImplementedError("Parallel update with CPLEX not implemented yet.")
+
+                            # Total rebalancing vehicles
+                            total_reb_vehicles = int(dictsum(self.env.acc, self.env.time + 1))
+
+                            # Generate parallel environments with updated state
+                            env_list = []
+                            obs_list = []
+                            action_rl_list = []
+                            desiredAcc_list = []
+
+                            for n in range(cfg.other.num_update):
+
+                                local_env = deepcopy(self.env)
+                                acc_new = convert_prob_to_count(grid[n,:], total_reb_vehicles)
+                                
+                                for i in local_env.region:
+
+                                    local_env.acc[i][local_env.time + 1] = int(acc_new[i])
+
+                                env_list.append(local_env)
+
+                                # desiredAcc
+                                obs_unparsed = (local_env.acc, local_env.time, local_env.dacc, local_env.demand)
+                                obs = self.parser.parse_obs(obs_unparsed)
+                                obs_list.append(obs)
+
+                                action_rl = self.select_action(obs)
+                                action_rl_list.append(action_rl)
+
+                                desiredAcc = {local_env.region[i]: int(action_rl[i] * dictsum(local_env.acc, local_env.time + 1))
+                                    for i in range(len(local_env.region))
+                                }
+
+                                desiredAcc_list.append(desiredAcc)
+
+
+                            # Parallel processing
+                            output_generator = Parallel(n_jobs=cfg.other.n_jobs)(delayed(temp_2)(env_list[n], desiredAcc_list[n], self.cplexpath, n) for n in range(cfg.other.num_update))
+                            output_list = list(output_generator)
+
+                            for n in range(cfg.other.num_update):
+
+                                rew_unscaled, new_obs_unparsed = output_list[n]
+                                rew = cfg.model.rew_scale * rew_unscaled
+                                new_obs = self.parser.parse_obs(new_obs_unparsed)
+
+                                if cfg.other.at_once_update:
+                                    buffer.store(obs_list[n], action_rl_list[n], rew, new_obs)
+                                else:
+                                    self.replay_buffer.store(obs_list[n], action_rl_list[n], rew, new_obs)
+
                         #"""
 
                         """
@@ -726,6 +786,28 @@ def temp(env, parser, select_action, cplexpath, rew_scale, n, acc_new):
         raise ValueError("Environment is done, check before calling this function failed.")
 
     return obs, action_rl, rew_scale * rew, new_obs, False
+
+def temp_2(env, desiredAcc, cplexpath, n):
+
+    try:
+        reb_action = solveRebFlow(
+            env,
+            env.cfg.directory,
+            desiredAcc,
+            cplexpath,
+            n
+        )
+
+    except:
+        print("Error in solveRebFlow; Solution does not exist.")
+        reb_action = [0.0]*(env.nregion*env.nregion)
+
+    new_obs_unparsed, rew_unscaled, done, _ = env.step(reb_action=reb_action)
+
+    if done:
+        raise ValueError("Environment is done, check before calling this function failed.")
+
+    return  (rew_unscaled, new_obs_unparsed)
 
 def process_task(env, parser, select_action, cplexpath, rew_scale, replay_buffer, lock, n):
     # Copy the environment
