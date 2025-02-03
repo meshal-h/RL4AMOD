@@ -25,6 +25,11 @@
       "json_hr": 19,
       "beta": 0.5
     },
+    "chicago_sparse_v2": {
+      "demand_ratio": 6.0,
+      "json_hr": 19,
+      "beta": 0.5
+    },
     "nyc_man_north": {
       "demand_ratio": 1.8,
       "json_hr": 19,
