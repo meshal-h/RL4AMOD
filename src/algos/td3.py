@@ -392,7 +392,7 @@ class TD3(nn.Module):
     
                     if not done:
 
-                        if cfg.other.at_once_update:
+                        if cfg.other.only_current_global_update:
                             buffer = ReplayData(device=self.device)
 
                         if cfg.other.sampling == 'dirichlet':
@@ -415,7 +415,7 @@ class TD3(nn.Module):
                                     nan_check(self.actor)
                                     break
 
-                                if cfg.other.at_once_update:
+                                if cfg.other.only_current_global_update:
                                     buffer.store(obs, action_rl, rew, new_obs)
                                 else:
                                     self.replay_buffer.store(obs, action_rl, rew, new_obs)
@@ -470,7 +470,7 @@ class TD3(nn.Module):
                                 rew = cfg.model.rew_scale * rew_unscaled
                                 new_obs = self.parser.parse_obs(new_obs_unparsed)
 
-                                if cfg.other.at_once_update:
+                                if cfg.other.only_current_global_update:
                                     buffer.store(obs_list[n], action_rl_list[n], rew, new_obs)
                                 else:
                                     self.replay_buffer.store(obs_list[n], action_rl_list[n], rew, new_obs)
@@ -532,8 +532,14 @@ class TD3(nn.Module):
                 
                 if not done: 
                     new_obs = self.parser.parse_obs(new_obs)
-                    if cfg.other.global_update and i_episode > 10:
-                        buffer.store(obs, action_rl, cfg.model.rew_scale * rew, new_obs)
+
+                    if cfg.other.global_update:
+
+                        if cfg.other.only_current_global_update and i_episode > 10:
+                            buffer.store(obs, action_rl, cfg.model.rew_scale * rew, new_obs)
+                        else:
+                            self.replay_buffer.store(obs, action_rl, cfg.model.rew_scale * rew, new_obs)
+
                     else:
                         self.replay_buffer.store(obs, action_rl, cfg.model.rew_scale * rew, new_obs)
 
@@ -542,9 +548,16 @@ class TD3(nn.Module):
                 ###########################
 
                 if i_episode > 10:
-                    if cfg.other.at_once_update:
-                        batch = buffer.sample_batch(cfg.other.num_update+1)
-                        self.update(data=batch)
+
+                    if cfg.other.global_update:
+
+                        if cfg.other.only_current_global_update:
+                            batch = buffer.sample_batch(cfg.other.num_update+1)
+                            self.update(data=batch)
+                        else:
+                            batch = self.replay_buffer.sample_batch(cfg.model.batch_size)
+                            self.update(data=batch)
+
                     else:
                         batch = self.replay_buffer.sample_batch(cfg.model.batch_size)
                         self.update(data=batch)
