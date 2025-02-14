@@ -399,6 +399,10 @@ class TD3(nn.Module):
                             grid = generate_probability_dirichlet(len(self.env.region), cfg.other.num_update)
                         elif cfg.other.sampling == 'uniform':
                             grid = generate_probability_uniform(len(self.env.region), cfg.other.num_update)
+                        elif cfg.other.sampling == 'dirichlet_v2':
+                            grid = generate_probability_dirichlet_v2(len(self.env.region), cfg.other.num_update)
+                        elif cfg.other.sampling == 'uniform_v2':
+                            grid = generate_probability_uniform_v2(len(self.env.region), cfg.other.num_update)
                         else:
                             raise ValueError("Invalid sampling method.")
 
@@ -853,6 +857,26 @@ def generate_probability_uniform(d, k):
     for _ in range(k):
         prob = np.random.rand(d) # Random uniform probability vector
         prob = prob / np.sum(prob)
+        grid.append(prob)
+
+    return np.array(grid)
+
+def generate_probability_dirichlet_v2(d, K):
+
+    grid = []
+    
+    alphas = np.linspace(2, 0.25, K)
+    for alpha in alphas:
+        grid.append(np.random.dirichlet([alpha] * d))
+    
+    return np.array(grid)
+
+def generate_probability_uniform_v2(d, k):
+    
+    grid=[]
+
+    for _ in range(k):
+        prob = np.random.dirichlet([1.0] * d)
         grid.append(prob)
 
     return np.array(grid)
