@@ -553,18 +553,21 @@ class TD3(nn.Module):
 
                 if i_episode > 10:
 
-                    if cfg.other.global_update:
+                    for _ in range(cfg.other.num_batches):
 
-                        if cfg.other.only_current_global_update:
-                            batch = buffer.sample_batch(cfg.other.num_update+1)
-                            self.update(data=batch)
+                        if cfg.other.global_update:
+
+                            if cfg.other.only_current_global_update:
+                                batch = buffer.sample_batch(cfg.other.num_update+1)
+                                self.update(data=batch)
+                            else:
+                                batch = self.replay_buffer.sample_batch(cfg.model.batch_size)
+                                self.update(data=batch)
+
                         else:
                             batch = self.replay_buffer.sample_batch(cfg.model.batch_size)
                             self.update(data=batch)
 
-                    else:
-                        batch = self.replay_buffer.sample_batch(cfg.model.batch_size)
-                        self.update(data=batch)
                 if sim =='sumo' and done:
                     traci.close()
 
